@@ -36,10 +36,10 @@ jobs:
           [[ "$TAG" =~ ^v2\.0\.0-rc\.[0-9]+$ ]]
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -78,14 +78,14 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
 
       - name: Azure login
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_STAGING_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -143,13 +143,6 @@ jobs:
             --slot-settings \
               WEBSITES_PORT=3000 \
               API_UPSTREAM="$api_staging_url"
-
-          az webapp config appsettings set \
-            --resource-group "$RG" \
-            --name "$WEB_APP" \
-            --slot-settings \
-              WEBSITES_PORT=3000 \
-              API_UPSTREAM="$api_production_url"
 
       - name: Verify database URLs are sticky slot settings
         shell: bash
@@ -257,14 +250,14 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
 
       - name: Azure login
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
