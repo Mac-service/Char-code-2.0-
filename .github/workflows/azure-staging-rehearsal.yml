@@ -32,10 +32,10 @@ jobs:
 
     steps:
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -73,14 +73,14 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
 
       - name: Azure login with OIDC
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_STAGING_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -93,6 +93,7 @@ jobs:
           API_APP: ${{ vars.AZURE_API_APP_NAME }}
           WEB_APP: ${{ vars.AZURE_WEB_APP_NAME }}
         run: |
+          set -euo pipefail
           for app in "$API_APP" "$WEB_APP"; do
             if ! az webapp deployment slot list \
               --resource-group "$RG" \
@@ -114,6 +115,7 @@ jobs:
           API_APP: ${{ vars.AZURE_API_APP_NAME }}
           WEB_APP: ${{ vars.AZURE_WEB_APP_NAME }}
         run: |
+          set -euo pipefail
           read_image() {
             local app="$1"
             local raw
@@ -139,6 +141,7 @@ jobs:
           API_APP: ${{ vars.AZURE_API_APP_NAME }}
           WEB_APP: ${{ vars.AZURE_WEB_APP_NAME }}
         run: |
+          set -euo pipefail
           api_slot_host="https://${API_APP}-staging.azurewebsites.net"
 
           az webapp config appsettings set \
@@ -165,6 +168,7 @@ jobs:
           RG: ${{ vars.AZURE_RESOURCE_GROUP }}
           WEB_APP: ${{ vars.AZURE_WEB_APP_NAME }}
         run: |
+          set -euo pipefail
           az webapp config access-restriction set \
             --resource-group "$RG" \
             --name "$WEB_APP" \
@@ -183,6 +187,7 @@ jobs:
           REGISTRY_USER: ${{ secrets.GHCR_PULL_USERNAME }}
           REGISTRY_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
+          set -euo pipefail
           for spec in \
             "$API_APP|$API_IMAGE" \
             "$WEB_APP|$WEB_IMAGE"; do
@@ -212,7 +217,9 @@ jobs:
           SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
           SMOKE_OWN_TENANT: ${{ vars.STAGING_SMOKE_OWN_TENANT }}
           SMOKE_FOREIGN_TENANT: ${{ vars.STAGING_SMOKE_FOREIGN_TENANT }}
-        run: node scripts/smoke-test.mjs
+        run: |
+          set -euo pipefail
+          node scripts/smoke-test.mjs
 
       - name: Automatic rollback after failed deployment or smoke test
         if: failure() && steps.previous.outcome == 'success'
@@ -226,6 +233,7 @@ jobs:
           REGISTRY_USER: ${{ secrets.GHCR_PULL_USERNAME }}
           REGISTRY_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
+          set -euo pipefail
           rollback() {
             local app="$1"
             local image="$2"
@@ -264,6 +272,7 @@ jobs:
           REGISTRY_USER: ${{ secrets.GHCR_PULL_USERNAME }}
           REGISTRY_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
+          set -euo pipefail
           if [ -z "$PREVIOUS_API" ] || [ -z "$PREVIOUS_WEB" ]; then
             echo "Rollback rehearsal requires a previous staging baseline."
             exit 1
@@ -298,7 +307,9 @@ jobs:
           SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
           SMOKE_OWN_TENANT: ${{ vars.STAGING_SMOKE_OWN_TENANT }}
           SMOKE_FOREIGN_TENANT: ${{ vars.STAGING_SMOKE_FOREIGN_TENANT }}
-        run: node scripts/smoke-test.mjs
+        run: |
+          set -euo pipefail
+          node scripts/smoke-test.mjs
 
       - name: Staging rehearsal summary
         if: always()

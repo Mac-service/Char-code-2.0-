@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install WiX
         shell: pwsh
@@ -32,7 +32,7 @@ jobs:
         run: .\installers\build-installer.ps1 -Target all
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Generate checksums
         shell: pwsh
@@ -66,7 +66,7 @@ jobs:
             }
 
       - name: Upload signed artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-signed
           path: |
