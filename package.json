@@ -22,7 +22,7 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "prisma": "6.15.0",
+    "prisma": "7.10.0",
     "typescript": "5.9.2"
   },
   "dependencies": {
