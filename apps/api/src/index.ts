@@ -65,10 +65,22 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!session) {
       const signals = detector.record(body.email, ip, false);
       await store.audit("auth.login.failed", correlationId);
+
+      // Audyt rejestruje ka¿dy sygna³; powiadamiamy tylko o nowych,
+      // aby trwaj¹cy atak nie zala³ administratora alertami.
       for (const signal of signals) {
         await store.audit(`security.anomaly.${signal}`, correlationId);
-        await store.enqueue("SecurityAnomalyDetected", { signal, correlationId });
       }
+
+      for (const signal of detector.alertable(signals, body.email, ip)) {
+        await store.enqueue("SecurityAnomalyDetected", {
+          signal,
+          correlationId,
+          email: body.email,
+          detectedAt: new Date().toISOString()
+        });
+      }
+
       json(res, 401, { error: "INVALID_CREDENTIALS" });
       return;
     }

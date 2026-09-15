@@ -30,10 +30,7 @@ async function claimBatch(limit = 25) {
   );
 }
 
-async function dispatch(event: any) {
-  if (event.eventType !== "PasswordResetRequested") {
-    throw new Error(`Unsupported outbox event: ${event.eventType}`);
-  }
+async function handlePasswordReset(event: any) {
   const payload = event.payload as {email?:string;token?:string;userId?:string};
   if (!payload.email || !payload.token) throw new Error("Invalid reset payload.");
 
@@ -49,6 +46,96 @@ async function dispatch(event: any) {
     },
     update: {},
   });
+}
+
+const SIGNAL_DESCRIPTIONS: Record<string, string> = {
+  CREDENTIAL_STUFFING:
+    "Wykryto proby logowania na to konto z wielu roznych adresow IP. " +
+    "Wskazuje to na uzycie danych pochodzacych z cudzego wycieku.",
+  PASSWORD_SPRAYING:
+    "Wykryto proby logowania na wiele roznych kont z jednego adresu IP. " +
+    "Wskazuje to na zautomatyzowany atak wymierzony w organizacje.",
+  DISTRIBUTED_SOURCE:
+    "Wykryto nietypowy rozklad zrodel prob logowania.",
+};
+
+/**
+ * Powiadamia administratorow organizacji o wykrytej anomalii (NIS2 art. 23).
+ *
+ * Odbiorcami sa administratorzy organizacji, do ktorych nalezy zaatakowane
+ * konto. Jesli konto nie istnieje - typowe przy password sprayingu - zdarzenie
+ * jest zamykane bez powiadomienia, poniewaz nie ma komu go doreczyc. Samo
+ * zdarzenie pozostaje w dzienniku audytu.
+ */
+async function handleSecurityAnomaly(event: any) {
+  const payload = event.payload as {
+    signal?: string; email?: string; correlationId?: string; detectedAt?: string;
+  };
+  if (!payload.signal || !payload.email) throw new Error("Invalid anomaly payload.");
+
+  const user = await db.user.findUnique({
+    where: { email: payload.email.toLowerCase() },
+    select: { memberships: { select: { organizationId: true } } },
+  });
+  if (!user) return;
+
+  const organizationIds = user.memberships.map((m: any) => m.organizationId);
+  if (organizationIds.length === 0) return;
+
+  const admins = await db.user.findMany({
+    where: {
+      memberships: {
+        some: { organizationId: { in: organizationIds }, role: "ORGANIZATION_ADMIN" },
+      },
+    },
+    select: { id: true, email: true },
+  });
+  if (admins.length === 0) return;
+
+  const description = SIGNAL_DESCRIPTIONS[payload.signal] ?? "Wykryto anomalie bezpieczenstwa.";
+  const detectedAt = payload.detectedAt ?? new Date().toISOString();
+  const body =
+    `${description}\n\n` +
+    `Konto: ${payload.email}\n` +
+    `Sygnal: ${payload.signal}\n` +
+    `Wykryto: ${detectedAt}\n` +
+    `Identyfikator korelacji: ${payload.correlationId ?? "brak"}\n\n` +
+    "Konto zostalo tymczasowo zablokowane przez mechanizm ochronny.";
+
+  // outboxEventId jest unikalny, wiec niesie go wylacznie pierwszy rekord.
+  // Pozostali odbiorcy dostaja deterministyczny identyfikator zlozony z
+  // identyfikatora zdarzenia i uzytkownika, co zachowuje idempotentnosc
+  // przy ponowieniu.
+  await db.$transaction(
+    admins.map((admin: any, index: number) => {
+      const identity = index === 0
+        ? { outboxEventId: event.id }
+        : { id: `${event.id}-${admin.id}` };
+      return db.notification.upsert({
+        where: identity as any,
+        create: {
+          ...identity,
+          userId: admin.id,
+          recipient: admin.email,
+          subject: "Char-code - alert bezpieczenstwa",
+          body,
+          status: "PENDING",
+        },
+        update: {},
+      });
+    })
+  );
+}
+
+const HANDLERS: Record<string, (event: any) => Promise<void>> = {
+  PasswordResetRequested: handlePasswordReset,
+  SecurityAnomalyDetected: handleSecurityAnomaly,
+};
+
+async function dispatch(event: any) {
+  const handler = HANDLERS[event.eventType];
+  if (!handler) throw new Error(`Unsupported outbox event: ${event.eventType}`);
+  await handler(event);
 }
 
 async function complete(event:any) {
