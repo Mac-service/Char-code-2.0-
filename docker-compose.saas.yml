@@ -42,10 +42,16 @@ services:
     environment:
       DATABASE_MODE: prisma
       DATABASE_URL: postgresql://char_code:${POSTGRES_PASSWORD}@postgres:5432/char_code
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [data]
+    # Siec 'app' zapewnia wyjscie na zewnatrz dla SMTP; 'data' jest internal.
+    networks: [app, data]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs: ["/tmp:size=64m,mode=1777"]
