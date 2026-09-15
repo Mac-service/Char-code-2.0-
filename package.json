@@ -15,7 +15,8 @@
     "prisma:validate": "prisma validate --schema packages/database/prisma/schema.prisma",
     "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
     "test:rls": "node tests/rls-postgres.mjs",
-    "test:security": "npm run test:e2e && npm run test:rls",
+    "test:anomaly": "npm run build && node tests/anomaly.mjs",
+    "test:security": "npm run test:e2e && npm run test:anomaly && npm run test:rls",
     "test:outbox": "node tests/outbox-postgres.mjs"
   },
   "engines": {
