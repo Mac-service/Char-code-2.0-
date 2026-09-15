@@ -104,7 +104,13 @@ zamkn¹æ sekcjê `DATA`.
 spacji. Treœæ wiadomoœci przechodzi przez `dotStuff`, co zabezpiecza kropkê
 rozpoczynaj¹c¹ liniê. Po³¹czenie musi byæ szyfrowane — brak STARTTLS
 przerywa wysy³kê zamiast degradowaæ do postaci jawnej.
-**Weryfikacja:** `tests/notifier.mjs` — siedem testów wstrzykniêæ i TLS.
+**Weryfikacja:** `tests/notifier.mjs` — budowa wiadomoœci i konfiguracja.
+`tests/smtp-conversation.mjs` — rozmowa z atrap¹ serwera: odmowa wysy³ki bez
+STARTTLS oraz potwierdzenie, ¿e treœæ nie trafia na ³¹cze przed TLS.
+
+**Niepokryte:** wymiana po nawi¹zaniu TLS (AUTH, MAIL FROM, RCPT TO, DATA).
+Wymaga³aby certyfikatu testowego. Ryzyko ograniczone — warstwa transportowa
+pochodzi z `node:tls`, a nie z w³asnej implementacji.
 
 ## 3. Znane ograniczenia
 
@@ -166,3 +172,4 @@ powiadomienia, ale pozostaje w dzienniku audytu.
 | 2026-09-15 | Wersja pierwotna | Wprowadzenie detekcji anomalii; T1–T8 |
 | 2026-09-15 | Powiadomienia | Konsument outboxu, wyciszanie alertów; O3 czêœciowo |
 | 2026-09-15 | Kana³ SMTP | Dostarczanie powiadomieñ, T9; O3 domkniête |
+| 2026-09-15 | Testy SMTP | Rozmowa z atrap¹ serwera; weryfikacja mutacyjna |
