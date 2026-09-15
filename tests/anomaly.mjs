@@ -19,15 +19,63 @@ function test(name, fn) {
 
 console.log("auth anomaly detection");
 
-test("blokuje konto po 5 nieudanych próbach", () => {
-  const detector = new AuthAnomalyDetector();
-  for (let i = 0; i < 5; i += 1) {
-    assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, true);
+test("blokuje konto po 10 nieudanych probach w oknie", () => {
+  let now = 1_000_000;
+  const detector = new AuthAnomalyDetector(() => now);
+  for (let i = 0; i < 10; i += 1) {
+    now += 61_000; // ponad limit opoznienia, ale wciaz w oknie 15 minut
     detector.record("user@ngo.test", "10.0.0.1", false);
   }
   const decision = detector.check("user@ngo.test", "10.0.0.1");
   assert.equal(decision.allowed, false);
-  assert.ok(decision.retryAfterSeconds > 0);
+  assert.equal(decision.retryAfterSeconds, 900);
+});
+
+test("proby rozlozone poza oknem nie kumuluja sie do blokady", () => {
+  let now = 1_000_000;
+  const detector = new AuthAnomalyDetector(() => now);
+  for (let i = 0; i < 10; i += 1) {
+    now += 120_000;
+    detector.record("user@ngo.test", "10.0.0.1", false);
+  }
+  // Okno wyczyscilo czesc prob, wiec twarda blokada nie zostaje osiagnieta.
+  assert.ok(detector.check("user@ngo.test", "10.0.0.1").retryAfterSeconds < 900);
+});
+
+test("pierwsze dwie pomylki nie powoduja zadnego opoznienia", () => {
+  const detector = new AuthAnomalyDetector();
+  for (let i = 0; i < 2; i += 1) {
+    assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, true);
+    detector.record("user@ngo.test", "10.0.0.1", false);
+  }
+  assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, true);
+});
+
+test("trzecia pomylka wymaga krotkiego odczekania, nie blokady", () => {
+  let now = 1_000_000;
+  const detector = new AuthAnomalyDetector(() => now);
+  for (let i = 0; i < 3; i += 1) detector.record("user@ngo.test", "10.0.0.1", false);
+
+  const blocked = detector.check("user@ngo.test", "10.0.0.1");
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.retryAfterSeconds <= 2, `oczekiwano krotkiej zwloki, otrzymano ${blocked.retryAfterSeconds}s`);
+
+  now += 1_500;
+  assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, true);
+});
+
+test("opoznienie rosnie wykladniczo", () => {
+  let now = 1_000_000;
+  const detector = new AuthAnomalyDetector(() => now);
+  for (let i = 0; i < 3; i += 1) detector.record("user@ngo.test", "10.0.0.1", false);
+  const first = detector.check("user@ngo.test", "10.0.0.1").retryAfterSeconds;
+
+  now += 60_000;
+  detector.record("user@ngo.test", "10.0.0.1", false);
+  detector.record("user@ngo.test", "10.0.0.1", false);
+  const later = detector.check("user@ngo.test", "10.0.0.1").retryAfterSeconds;
+
+  assert.ok(later > first, `oczekiwano wzrostu, bylo ${first}s -> ${later}s`);
 });
 
 test("udane logowanie czyœci licznik nieudanych prób", () => {
@@ -37,10 +85,14 @@ test("udane logowanie czyœci licznik nieudanych prób", () => {
   assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, true);
 });
 
-test("blokada wygasa po up³ywie okna czasowego", () => {
+test("blokada wygasa po uplywie okna czasowego", () => {
   let now = 1_000_000;
   const detector = new AuthAnomalyDetector(() => now);
-  for (let i = 0; i < 5; i += 1) detector.record("user@ngo.test", "10.0.0.1", false);
+  for (let i = 0; i < 10; i += 1) {
+    now += 61_000;
+    detector.record("user@ngo.test", "10.0.0.1", false);
+  }
+  detector.check("user@ngo.test", "10.0.0.1");
   assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, false);
   now += 15 * 60_000 + 1_000;
   assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, true);
@@ -72,7 +124,7 @@ test("blokuje IP po 20 nieudanych próbach na ró¿ne konta", () => {
 
 test("adres e-mail normalizowany — wielkoœæ liter nie omija limitu", () => {
   const detector = new AuthAnomalyDetector();
-  for (let i = 0; i < 5; i += 1) detector.record("User@NGO.test", "10.0.0.1", false);
+  for (let i = 0; i < 3; i += 1) detector.record("User@NGO.test", "10.0.0.1", false);
   assert.equal(detector.check("user@ngo.test", "10.0.0.1").allowed, false);
 });
 

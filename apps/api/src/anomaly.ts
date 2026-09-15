@@ -30,7 +30,21 @@ interface Attempt {
 }
 
 const WINDOW_MS = 15 * 60_000;
-const MAX_FAILURES_PER_ACCOUNT = 5;
+
+/**
+ * Od tej liczby nieudanych prób kolejne wymagaj¹ odczekania.
+ *
+ * Próg jest celowo niski, ale nie blokuje konta — u¿ytkownik, który pomyli
+ * has³o, czeka sekundy, nie minuty. OpóŸnienie roœnie wyk³adniczo, wiêc
+ * zautomatyzowany atak traci przepustowoœæ znacznie szybciej ni¿ cz³owiek
+ * traci cierpliwoœæ.
+ */
+const SOFT_THRESHOLD = 3;
+const SOFT_DELAY_BASE_MS = 1_000;
+const SOFT_DELAY_CAP_MS = 60_000;
+
+/** Twarda blokada konta. Osi¹galna dopiero po serii opóŸnionych prób. */
+const MAX_FAILURES_PER_ACCOUNT = 10;
 const MAX_FAILURES_PER_IP = 20;
 const SPRAY_DISTINCT_ACCOUNTS = 10;
 const STUFFING_DISTINCT_IPS = 5;
@@ -118,6 +132,25 @@ export class AuthAnomalyDetector {
     if (accountFailures.length >= MAX_FAILURES_PER_ACCOUNT) {
       this.lockouts.set(key, current + LOCKOUT_MS);
       return { allowed: false, retryAfterSeconds: Math.ceil(LOCKOUT_MS / 1000), signals };
+    }
+
+    // Przed twardym progiem stosujemy narastaj¹ce opóŸnienie zamiast blokady.
+    // Dziêki temu pomy³ka cz³owieka kosztuje sekundy, a nie kwadrans.
+    if (accountFailures.length >= SOFT_THRESHOLD) {
+      const required = Math.min(
+        SOFT_DELAY_BASE_MS * 2 ** (accountFailures.length - SOFT_THRESHOLD),
+        SOFT_DELAY_CAP_MS
+      );
+      const last = accountFailures[accountFailures.length - 1]!.at;
+      const elapsed = current - last;
+
+      if (elapsed < required) {
+        return {
+          allowed: false,
+          retryAfterSeconds: Math.max(1, Math.ceil((required - elapsed) / 1000)),
+          signals
+        };
+      }
     }
 
     if (ipFailures.length >= MAX_FAILURES_PER_IP) {

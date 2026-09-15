@@ -23,11 +23,22 @@ Zakres: warstwa uwierzytelniania API (`apps/api/src/anomaly.ts`,
 
 Napastnik odgaduje has³o jednego konta przez powtarzane próby.
 
-**Kontrola:** blokada konta po 5 nieudanych próbach w oknie 15 minut.
-OdpowiedŸ `429` z nag³ówkiem `Retry-After`.
-**Weryfikacja:** `tests/anomaly.mjs` — „blokuje konto po 5 nieudanych próbach".
-**Ryzyko szcz¹tkowe:** napastnik mo¿e celowo blokowaæ konto ofiary (DoS na
-koncie). Zaakceptowane — blokada wygasa automatycznie po 15 minutach.
+**Kontrola:** dwustopniowa. Od 3. nieudanej próby kolejne wymagaj¹ odczekania
+— opóŸnienie roœnie wyk³adniczo (1 s, 2 s, 4 s … do 60 s). Twarda blokada
+konta na 15 minut dopiero po 10 nieudanych próbach w oknie. OdpowiedŸ `429`
+z nag³ówkiem `Retry-After`.
+
+**Skutecznoœæ (zmierzona):** atakuj¹cy próbuj¹cy bez przerwy wykonuje
+**40 prób na godzinê** zamiast 3600. U¿ytkownik, który pomyli³ has³o trzy
+razy, czeka **1 sekundê**.
+
+**Uzasadnienie:** wczeœniejszy próg binarny (5 prób ? 15 minut blokady) by³
+zbyt dotkliwy dla wolontariuszy loguj¹cych siê sporadycznie. OpóŸnienie
+progresywne ogranicza automat równie skutecznie, nie karz¹c cz³owieka.
+**Weryfikacja:** `tests/anomaly.mjs` — piêæ testów progu i opóŸnienia.
+**Ryzyko szcz¹tkowe:** napastnik mo¿e celowo doprowadziæ do blokady konta
+ofiary (DoS na koncie), ale wymaga to 10 prób w oknie. Blokada wygasa
+samoczynnie po 15 minutach.
 
 ### T2 — Password spraying (Spoofing)
 
@@ -124,11 +135,11 @@ load balancerem napastnik uzyskuje efektywnie N-krotnoœæ progu.
 **Docelowo:** wspólny magazyn (Redis) z licznikami atomowymi przed
 skalowaniem poziomym.
 
-### O2 — Brak progresywnego opóŸnienia
+### O2 — Progresywne opóŸnienie (zrealizowane)
 
-Obecnie próg jest binarny (dozwolone/zablokowane). OpóŸnienie rosn¹ce
-wyk³adniczo spowalnia³oby napastnika, nie blokuj¹c u¿ytkownika, który
-pomyli³ has³o.
+Próg nie jest ju¿ binarny. Od 3. nieudanej próby obowi¹zuje narastaj¹ce
+opóŸnienie, a twarda blokada wchodzi dopiero przy 10 próbach w oknie.
+Szczegó³y i pomiary — patrz T1.
 
 ### O3 — Powiadamianie o anomaliach (zrealizowane)
 
@@ -173,3 +184,4 @@ powiadomienia, ale pozostaje w dzienniku audytu.
 | 2026-09-15 | Powiadomienia | Konsument outboxu, wyciszanie alertów; O3 czêœciowo |
 | 2026-09-15 | Kana³ SMTP | Dostarczanie powiadomieñ, T9; O3 domkniête |
 | 2026-09-15 | Testy SMTP | Rozmowa z atrap¹ serwera; weryfikacja mutacyjna |
+| 2026-09-15 | Progi logowania | OpóŸnienie progresywne zamiast blokady; O2 |
