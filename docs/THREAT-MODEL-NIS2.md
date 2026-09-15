@@ -94,6 +94,18 @@ najstarsze wpisy s¹ odrzucane. Limity per konto dzia³aj¹ nadal.
 z `correlationId`. Sygna³y anomalii dodatkowo do outboxu jako
 `SecurityAnomalyDetected`.
 
+### T9 — Wstrzykniêcie nag³ówków SMTP (Tampering)
+
+Adres e-mail pochodzi z danych wejœciowych. Znaki CR/LF w wartoœci
+nag³ówka pozwoli³yby dodaæ w³asne nag³ówki (np. `Bcc`) lub przedwczeœnie
+zamkn¹æ sekcjê `DATA`.
+
+**Kontrola:** `sanitizeHeader` zwija CR, LF i bajt zerowy do pojedynczej
+spacji. Treœæ wiadomoœci przechodzi przez `dotStuff`, co zabezpiecza kropkê
+rozpoczynaj¹c¹ liniê. Po³¹czenie musi byæ szyfrowane — brak STARTTLS
+przerywa wysy³kê zamiast degradowaæ do postaci jawnej.
+**Weryfikacja:** `tests/notifier.mjs` — siedem testów wstrzykniêæ i TLS.
+
 ## 3. Znane ograniczenia
 
 ### O1 — Stan w pamiêci procesu (istotne)
@@ -112,20 +124,25 @@ Obecnie próg jest binarny (dozwolone/zablokowane). OpóŸnienie rosn¹ce
 wyk³adniczo spowalnia³oby napastnika, nie blokuj¹c u¿ytkownika, który
 pomyli³ has³o.
 
-### O3 — Powiadamianie o anomaliach (zrealizowane czêœciowo)
+### O3 — Powiadamianie o anomaliach (zrealizowane)
 
 Sygna³y anomalii trafiaj¹ do outboxu jako `SecurityAnomalyDetected`.
 Konsument (`apps/api/src/worker.ts`) ustala administratorów organizacji, do
 której nale¿y zaatakowane konto, i tworzy dla nich rekordy `Notification`.
+Osobna pêtla dostarcza je kana³em SMTP (`apps/api/src/notifier.ts`).
 
 Alerty s¹ wyciszane przez 60 minut dla tej samej pary sygna³/Ÿród³o, aby
 trwaj¹cy atak nie zala³ administratora. Dziennik audytu pozostaje kompletny —
 ograniczane s¹ wy³¹cznie powiadomienia.
 
-**Pozostaje do wykonania:** faktyczna wysy³ka. Rekordy `Notification` maj¹
-status `PENDING` i wymagaj¹ procesu dostarczaj¹cego je kana³em e-mail.
-Dopóki go nie ma, alert jest widoczny wy³¹cznie w bazie danych, co **nie
-wype³nia** obowi¹zku wczesnego ostrze¿enia z art. 23 NIS2 (24 h).
+Dostarczanie: do 5 prób, status `PENDING` ? `SENDING` ? `SENT`/`FAILED`.
+Przejœcie przez `SENDING` jest aktualizacj¹ warunkow¹, co zapobiega podwójnej
+wysy³ce przy wielu instancjach workera.
+
+**Warunek wdro¿eniowy:** bez `SMTP_HOST` i `SMTP_FROM` kana³ jest nieaktywny,
+powiadomienia pozostaj¹ w statusie `PENDING`, a obowi¹zek wczesnego
+ostrze¿enia z art. 23 NIS2 (24 h) **nie jest spe³niony**. Worker zapisuje
+wtedy ostrze¿enie przy starcie.
 
 **Przypadek brzegowy:** przy password sprayingu na nieistniej¹ce konta nie
 ma organizacji, któr¹ mo¿na powiadomiæ. Zdarzenie jest wtedy zamykane bez
@@ -139,7 +156,8 @@ powiadomienia, ale pozostaje w dzienniku audytu.
 | Wykrywanie incydentów | NIS2 21(2)(b) | T2, T3, sygna³y anomalii |
 | Rozliczalnoœæ | NIS2 21(2)(d) | T8, dziennik audytu |
 | Bezpieczeñstwo danych osobowych | RODO art. 32 | T1–T5, RLS |
-| Zg³aszanie incydentów | NIS2 art. 23 | Czêœciowe — alert tworzony, brak wysy³ki (O3) |
+| Zg³aszanie incydentów | NIS2 art. 23 | Zrealizowane pod warunkiem konfiguracji SMTP (O3) |
+| Bezpieczeñstwo komunikacji | NIS2 21(2)(j) | T9 — wymuszone TLS |
 
 ## 5. Historia przegl¹du
 
@@ -147,3 +165,4 @@ powiadomienia, ale pozostaje w dzienniku audytu.
 |---|---|---|
 | 2026-09-15 | Wersja pierwotna | Wprowadzenie detekcji anomalii; T1–T8 |
 | 2026-09-15 | Powiadomienia | Konsument outboxu, wyciszanie alertów; O3 czêœciowo |
+| 2026-09-15 | Kana³ SMTP | Dostarczanie powiadomieñ, T9; O3 domkniête |

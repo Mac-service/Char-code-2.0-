@@ -16,7 +16,8 @@
     "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
     "test:rls": "node tests/rls-postgres.mjs",
     "test:anomaly": "npm run build && node tests/anomaly.mjs",
-    "test:security": "npm run test:e2e && npm run test:anomaly && npm run test:rls",
+    "test:notifier": "npm run build && node tests/notifier.mjs",
+    "test:security": "npm run test:e2e && npm run test:anomaly && npm run test:notifier && npm run test:rls",
     "test:outbox": "node tests/outbox-postgres.mjs"
   },
   "engines": {

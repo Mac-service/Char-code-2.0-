@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import { sendMail, smtpConfigFromEnv, type SmtpConfig } from "./notifier.js";
 
 const db = new PrismaClient();
 const MAX_ATTEMPTS = 8;
@@ -165,13 +166,80 @@ async function fail(event:any,error:unknown) {
   });
 }
 
+const MAX_DELIVERY_ATTEMPTS = 5;
+
+/**
+ * Dostarcza oczekujace powiadomienia kanalem SMTP.
+ *
+ * Brak konfiguracji SMTP nie jest bledem - powiadomienia pozostaja wtedy w
+ * statusie PENDING i sa widoczne wylacznie w bazie. Stan ten jest logowany,
+ * poniewaz oznacza niespelnienie obowiazku wczesnego ostrzezenia (NIS2 art. 23).
+ */
+async function deliverNotifications(config: SmtpConfig | null) {
+  if (!config) return;
+
+  const pending = await db.notification.findMany({
+    where: { status: "PENDING", attempts: { lt: MAX_DELIVERY_ATTEMPTS } },
+    orderBy: { createdAt: "asc" },
+    take: 20,
+  });
+
+  for (const notification of pending) {
+    // Znacznik SENDING zapobiega podwojnej wysylce przy wielu instancjach
+    // workera: aktualizacja warunkowa przechodzi tylko dla jednej z nich.
+    const claimed = await db.notification.updateMany({
+      where: { id: notification.id, status: "PENDING" },
+      data: { status: "SENDING", attempts: { increment: 1 } },
+    });
+    if (claimed.count !== 1) continue;
+
+    try {
+      await sendMail(config, {
+        to: notification.recipient,
+        subject: notification.subject,
+        body: notification.body,
+      });
+      await db.notification.update({
+        where: { id: notification.id },
+        data: { status: "SENT", sentAt: new Date(), lastError: null },
+      });
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : "Unknown error").slice(0, 2000);
+      const exhausted = notification.attempts + 1 >= MAX_DELIVERY_ATTEMPTS;
+      await db.notification.update({
+        where: { id: notification.id },
+        data: { status: exhausted ? "FAILED" : "PENDING", lastError: message },
+      });
+      console.error(
+        `Notification ${notification.id} delivery failed` +
+          (exhausted ? " (attempts exhausted)" : ""),
+        message
+      );
+    }
+  }
+}
+
 async function main(){
   await db.$connect();
+
+  const smtp = smtpConfigFromEnv();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured (SMTP_HOST/SMTP_FROM missing). Notifications will " +
+        "remain PENDING and no security alerts will be delivered."
+    );
+  }
+
   while(true){
     const events:any[]=await claimBatch();
     for(const event of events){
       try{await dispatch(event);await complete(event);}catch(error){await fail(event,error);}
     }
+
+    try{await deliverNotifications(smtp);}catch(error){
+      console.error("Notification delivery sweep failed",error);
+    }
+
     if(events.length===0) await new Promise(r=>setTimeout(r,1000));
   }
 }
