@@ -5,8 +5,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createStore } from "./store.js";
 import { bearer, json, readJson, tenant } from "./http.js";
 import { passwordHash, validatePassword } from "./security.js";
+import { AuthAnomalyDetector, clientIp } from "./anomaly.js";
 
 const store = await createStore();
+const detector = new AuthAnomalyDetector();
 
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
@@ -48,19 +50,60 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return;
     }
 
+    const ip = clientIp(req.headers, req.socket.remoteAddress);
+    const decision = detector.check(body.email, ip);
+
+    if (!decision.allowed) {
+      await store.audit("auth.login.throttled", correlationId);
+      res.setHeader("retry-after", String(decision.retryAfterSeconds));
+      json(res, 429, { error: "TOO_MANY_ATTEMPTS", retryAfterSeconds: decision.retryAfterSeconds });
+      return;
+    }
+
     const session = await store.authenticate(body.email, body.password);
+
     if (!session) {
+      const signals = detector.record(body.email, ip, false);
+      await store.audit("auth.login.failed", correlationId);
+
+      // Audyt rejestruje ka¿dy sygna³; powiadamiamy tylko o nowych,
+      // aby trwaj¹cy atak nie zala³ administratora alertami.
+      for (const signal of signals) {
+        await store.audit(`security.anomaly.${signal}`, correlationId);
+      }
+
+      for (const signal of detector.alertable(signals, body.email, ip)) {
+        await store.enqueue("SecurityAnomalyDetected", {
+          signal,
+          correlationId,
+          email: body.email,
+          detectedAt: new Date().toISOString()
+        });
+      }
+
       json(res, 401, { error: "INVALID_CREDENTIALS" });
       return;
     }
 
+    detector.record(body.email, ip, true);
     await store.audit("auth.login", correlationId, session.userId);
     json(res, 200, { accessToken: session.token, expiresInSeconds: 900 });
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/account/password/forgot") {
-    const { body } = await readJson<{ email?: string }>(req);
+    const { body, correlationId } = await readJson<{ email?: string }>(req);
+    const ip = clientIp(req.headers, req.socket.remoteAddress);
+
+    // Ten sam limit co logowanie — ogranicza enumeracjê kont i zalew e-maili.
+    if (!detector.check(body.email ?? "unknown", ip).allowed) {
+      await store.audit("account.password.forgot.throttled", correlationId);
+      json(res, 202, { accepted: true });
+      return;
+    }
+
+    detector.record(body.email ?? "unknown", ip, false);
+
     if (body.email) {
       const token = await store.requestPasswordReset(body.email);
       if (token) await store.enqueue("PasswordResetRequested", { email: body.email, token });
@@ -101,8 +144,19 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
 
   if (method === "POST" && url.pathname === "/api/account/mfa/recover") {
-    const { body } = await readJson<{ code?: string }>(req);
+    const { body, correlationId } = await readJson<{ code?: string }>(req);
+    const ip = clientIp(req.headers, req.socket.remoteAddress);
+
+    // Kody odzyskiwania omijaj¹ MFA — limitowane per IP.
+    if (!detector.check(`mfa-recover:${ip}`, ip).allowed) {
+      await store.audit("account.mfa.recover.throttled", correlationId);
+      json(res, 429, { error: "TOO_MANY_ATTEMPTS" });
+      return;
+    }
+
     const ok = body.code ? await store.recoverMfa(body.code) : false;
+    detector.record(`mfa-recover:${ip}`, ip, ok);
+    await store.audit(ok ? "account.mfa.recovered" : "account.mfa.recover.failed", correlationId);
     json(res, ok ? 200 : 400, ok ? { recovered: true } : { error: "INVALID_RECOVERY_CODE" });
     return;
   }

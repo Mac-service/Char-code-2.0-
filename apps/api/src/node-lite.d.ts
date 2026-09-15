@@ -11,6 +11,7 @@ declare module "node:http" {
     method?: string;
     url?: string;
     headers: Record<string, string | string[] | undefined>;
+    socket: { remoteAddress?: string };
     [Symbol.asyncIterator](): AsyncIterator<Uint8Array>;
   }
 
@@ -45,6 +46,32 @@ declare module "node:crypto" {
 declare class Buffer extends Uint8Array {
   static from(value: string | Uint8Array, encoding?: string): Buffer;
   toString(encoding?: string): string;
+}
+
+declare module "node:net" {
+  export interface Socket {
+    write(data: string): boolean;
+    end(): void;
+    destroy(): void;
+    setEncoding(encoding: string): void;
+    on(event: "data", listener: (chunk: string) => void): Socket;
+    on(event: "error", listener: (error: Error) => void): Socket;
+    once(event: string, listener: (...args: never[]) => void): Socket;
+    removeAllListeners(event?: string): Socket;
+  }
+
+  export function connect(options: { host: string; port: number }): Socket;
+}
+
+declare module "node:tls" {
+  import type { Socket } from "node:net";
+
+  export function connect(options: {
+    host?: string;
+    port?: number;
+    socket?: Socket;
+    rejectUnauthorized?: boolean;
+  }): Socket;
 }
 
 declare module "@prisma/client" {

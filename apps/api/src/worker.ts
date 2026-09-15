@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import { sendMail, smtpConfigFromEnv, type SmtpConfig } from "./notifier.js";
 
 const db = new PrismaClient();
 const MAX_ATTEMPTS = 8;
@@ -30,10 +31,7 @@ async function claimBatch(limit = 25) {
   );
 }
 
-async function dispatch(event: any) {
-  if (event.eventType !== "PasswordResetRequested") {
-    throw new Error(`Unsupported outbox event: ${event.eventType}`);
-  }
+async function handlePasswordReset(event: any) {
   const payload = event.payload as {email?:string;token?:string;userId?:string};
   if (!payload.email || !payload.token) throw new Error("Invalid reset payload.");
 
@@ -49,6 +47,96 @@ async function dispatch(event: any) {
     },
     update: {},
   });
+}
+
+const SIGNAL_DESCRIPTIONS: Record<string, string> = {
+  CREDENTIAL_STUFFING:
+    "Wykryto proby logowania na to konto z wielu roznych adresow IP. " +
+    "Wskazuje to na uzycie danych pochodzacych z cudzego wycieku.",
+  PASSWORD_SPRAYING:
+    "Wykryto proby logowania na wiele roznych kont z jednego adresu IP. " +
+    "Wskazuje to na zautomatyzowany atak wymierzony w organizacje.",
+  DISTRIBUTED_SOURCE:
+    "Wykryto nietypowy rozklad zrodel prob logowania.",
+};
+
+/**
+ * Powiadamia administratorow organizacji o wykrytej anomalii (NIS2 art. 23).
+ *
+ * Odbiorcami sa administratorzy organizacji, do ktorych nalezy zaatakowane
+ * konto. Jesli konto nie istnieje - typowe przy password sprayingu - zdarzenie
+ * jest zamykane bez powiadomienia, poniewaz nie ma komu go doreczyc. Samo
+ * zdarzenie pozostaje w dzienniku audytu.
+ */
+async function handleSecurityAnomaly(event: any) {
+  const payload = event.payload as {
+    signal?: string; email?: string; correlationId?: string; detectedAt?: string;
+  };
+  if (!payload.signal || !payload.email) throw new Error("Invalid anomaly payload.");
+
+  const user = await db.user.findUnique({
+    where: { email: payload.email.toLowerCase() },
+    select: { memberships: { select: { organizationId: true } } },
+  });
+  if (!user) return;
+
+  const organizationIds = user.memberships.map((m: any) => m.organizationId);
+  if (organizationIds.length === 0) return;
+
+  const admins = await db.user.findMany({
+    where: {
+      memberships: {
+        some: { organizationId: { in: organizationIds }, role: "ORGANIZATION_ADMIN" },
+      },
+    },
+    select: { id: true, email: true },
+  });
+  if (admins.length === 0) return;
+
+  const description = SIGNAL_DESCRIPTIONS[payload.signal] ?? "Wykryto anomalie bezpieczenstwa.";
+  const detectedAt = payload.detectedAt ?? new Date().toISOString();
+  const body =
+    `${description}\n\n` +
+    `Konto: ${payload.email}\n` +
+    `Sygnal: ${payload.signal}\n` +
+    `Wykryto: ${detectedAt}\n` +
+    `Identyfikator korelacji: ${payload.correlationId ?? "brak"}\n\n` +
+    "Konto zostalo tymczasowo zablokowane przez mechanizm ochronny.";
+
+  // outboxEventId jest unikalny, wiec niesie go wylacznie pierwszy rekord.
+  // Pozostali odbiorcy dostaja deterministyczny identyfikator zlozony z
+  // identyfikatora zdarzenia i uzytkownika, co zachowuje idempotentnosc
+  // przy ponowieniu.
+  await db.$transaction(
+    admins.map((admin: any, index: number) => {
+      const identity = index === 0
+        ? { outboxEventId: event.id }
+        : { id: `${event.id}-${admin.id}` };
+      return db.notification.upsert({
+        where: identity as any,
+        create: {
+          ...identity,
+          userId: admin.id,
+          recipient: admin.email,
+          subject: "Char-code - alert bezpieczenstwa",
+          body,
+          status: "PENDING",
+        },
+        update: {},
+      });
+    })
+  );
+}
+
+const HANDLERS: Record<string, (event: any) => Promise<void>> = {
+  PasswordResetRequested: handlePasswordReset,
+  SecurityAnomalyDetected: handleSecurityAnomaly,
+};
+
+async function dispatch(event: any) {
+  const handler = HANDLERS[event.eventType];
+  if (!handler) throw new Error(`Unsupported outbox event: ${event.eventType}`);
+  await handler(event);
 }
 
 async function complete(event:any) {
@@ -78,13 +166,80 @@ async function fail(event:any,error:unknown) {
   });
 }
 
+const MAX_DELIVERY_ATTEMPTS = 5;
+
+/**
+ * Dostarcza oczekujace powiadomienia kanalem SMTP.
+ *
+ * Brak konfiguracji SMTP nie jest bledem - powiadomienia pozostaja wtedy w
+ * statusie PENDING i sa widoczne wylacznie w bazie. Stan ten jest logowany,
+ * poniewaz oznacza niespelnienie obowiazku wczesnego ostrzezenia (NIS2 art. 23).
+ */
+async function deliverNotifications(config: SmtpConfig | null) {
+  if (!config) return;
+
+  const pending = await db.notification.findMany({
+    where: { status: "PENDING", attempts: { lt: MAX_DELIVERY_ATTEMPTS } },
+    orderBy: { createdAt: "asc" },
+    take: 20,
+  });
+
+  for (const notification of pending) {
+    // Znacznik SENDING zapobiega podwojnej wysylce przy wielu instancjach
+    // workera: aktualizacja warunkowa przechodzi tylko dla jednej z nich.
+    const claimed = await db.notification.updateMany({
+      where: { id: notification.id, status: "PENDING" },
+      data: { status: "SENDING", attempts: { increment: 1 } },
+    });
+    if (claimed.count !== 1) continue;
+
+    try {
+      await sendMail(config, {
+        to: notification.recipient,
+        subject: notification.subject,
+        body: notification.body,
+      });
+      await db.notification.update({
+        where: { id: notification.id },
+        data: { status: "SENT", sentAt: new Date(), lastError: null },
+      });
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : "Unknown error").slice(0, 2000);
+      const exhausted = notification.attempts + 1 >= MAX_DELIVERY_ATTEMPTS;
+      await db.notification.update({
+        where: { id: notification.id },
+        data: { status: exhausted ? "FAILED" : "PENDING", lastError: message },
+      });
+      console.error(
+        `Notification ${notification.id} delivery failed` +
+          (exhausted ? " (attempts exhausted)" : ""),
+        message
+      );
+    }
+  }
+}
+
 async function main(){
   await db.$connect();
+
+  const smtp = smtpConfigFromEnv();
+  if (!smtp) {
+    console.warn(
+      "SMTP not configured (SMTP_HOST/SMTP_FROM missing). Notifications will " +
+        "remain PENDING and no security alerts will be delivered."
+    );
+  }
+
   while(true){
     const events:any[]=await claimBatch();
     for(const event of events){
       try{await dispatch(event);await complete(event);}catch(error){await fail(event,error);}
     }
+
+    try{await deliverNotifications(smtp);}catch(error){
+      console.error("Notification delivery sweep failed",error);
+    }
+
     if(events.length===0) await new Promise(r=>setTimeout(r,1000));
   }
 }
