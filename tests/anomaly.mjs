@@ -87,6 +87,35 @@ test("X-Forwarded-For honorowany przy TRUST_PROXY=true", () => {
   delete process.env.TRUST_PROXY;
 });
 
+test("alert o tym samym sygnale nie powtarza sie w oknie wyciszenia", () => {
+  const detector = new AuthAnomalyDetector();
+  const first = detector.alertable(["CREDENTIAL_STUFFING"], "ceo@ngo.test", "10.0.0.1");
+  const second = detector.alertable(["CREDENTIAL_STUFFING"], "ceo@ngo.test", "10.0.0.2");
+  assert.deepEqual(first, ["CREDENTIAL_STUFFING"]);
+  assert.deepEqual(second, []);
+});
+
+test("alert powtarza sie po uplywie okna wyciszenia", () => {
+  let now = 1_000_000;
+  const detector = new AuthAnomalyDetector(() => now);
+  assert.deepEqual(detector.alertable(["CREDENTIAL_STUFFING"], "ceo@ngo.test", "10.0.0.1"), ["CREDENTIAL_STUFFING"]);
+  now += 60 * 60_000 + 1_000;
+  assert.deepEqual(detector.alertable(["CREDENTIAL_STUFFING"], "ceo@ngo.test", "10.0.0.1"), ["CREDENTIAL_STUFFING"]);
+});
+
+test("spraying wyciszany per IP, stuffing per konto", () => {
+  const detector = new AuthAnomalyDetector();
+  // Spraying z tego samego IP na inne konto - wyciszony.
+  detector.alertable(["PASSWORD_SPRAYING"], "a@ngo.test", "10.0.0.7");
+  assert.deepEqual(detector.alertable(["PASSWORD_SPRAYING"], "b@ngo.test", "10.0.0.7"), []);
+  // Stuffing na inne konto - alert przechodzi.
+  detector.alertable(["CREDENTIAL_STUFFING"], "a@ngo.test", "10.0.0.1");
+  assert.deepEqual(
+    detector.alertable(["CREDENTIAL_STUFFING"], "b@ngo.test", "10.0.0.1"),
+    ["CREDENTIAL_STUFFING"]
+  );
+});
+
 if (failures > 0) {
   console.error(`\n${failures} test(ów) nie przesz³o.`);
   process.exit(1);

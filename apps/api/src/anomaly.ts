@@ -37,11 +37,43 @@ const STUFFING_DISTINCT_IPS = 5;
 const LOCKOUT_MS = 15 * 60_000;
 const MAX_ATTEMPTS_RETAINED = 10_000;
 
+/**
+ * Minimalny odstêp miêdzy alertami o tym samym sygnale z tego samego Ÿród³a.
+ *
+ * Bez tego trwaj¹cy atak generowa³by alert przy ka¿dej próbie, zalewaj¹c
+ * administratora i zacieraj¹c sygna³. Dziennik audytu pozostaje kompletny —
+ * ograniczane s¹ wy³¹cznie powiadomienia.
+ */
+const ALERT_COOLDOWN_MS = 60 * 60_000;
+
 export class AuthAnomalyDetector {
   private attempts: Attempt[] = [];
   private readonly lockouts = new Map<string, number>();
+  private readonly alertedAt = new Map<string, number>();
 
   constructor(private readonly now: () => number = Date.now) {}
+
+  /**
+   * Zwraca sygna³y kwalifikuj¹ce siê do powiadomienia administratora,
+   * z pominiêciem tych zg³oszonych niedawno dla tego samego Ÿród³a.
+   */
+  alertable(signals: AnomalySignal[], email: string, ip: string): AnomalySignal[] {
+    const current = this.now();
+    const fresh: AnomalySignal[] = [];
+
+    for (const signal of signals) {
+      const scope = signal === "PASSWORD_SPRAYING" ? `ip:${ip}` : this.accountKey(email);
+      const key = `${signal}:${scope}`;
+      const last = this.alertedAt.get(key);
+
+      if (last === undefined || current - last >= ALERT_COOLDOWN_MS) {
+        this.alertedAt.set(key, current);
+        fresh.push(signal);
+      }
+    }
+
+    return fresh;
+  }
 
   /**
    * Sprawdza, czy próba logowania mo¿e zostaæ wykonana.
@@ -126,6 +158,9 @@ export class AuthAnomalyDetector {
     }
     for (const [key, until] of this.lockouts) {
       if (until <= current) this.lockouts.delete(key);
+    }
+    for (const [key, at] of this.alertedAt) {
+      if (current - at >= ALERT_COOLDOWN_MS) this.alertedAt.delete(key);
     }
   }
 

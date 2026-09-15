@@ -112,11 +112,24 @@ Obecnie próg jest binarny (dozwolone/zablokowane). OpóŸnienie rosn¹ce
 wyk³adniczo spowalnia³oby napastnika, nie blokuj¹c u¿ytkownika, który
 pomyli³ has³o.
 
-### O3 — Brak powiadomieñ o anomaliach
+### O3 — Powiadamianie o anomaliach (zrealizowane czêœciowo)
 
-Sygna³y trafiaj¹ do outboxu, ale nie ma konsumenta wysy³aj¹cego alert do
-administratora organizacji. Dla NIS2 istotne s¹ terminy zg³aszania
-incydentów (wczesne ostrze¿enie w 24 h) — wymaga uzupe³nienia.
+Sygna³y anomalii trafiaj¹ do outboxu jako `SecurityAnomalyDetected`.
+Konsument (`apps/api/src/worker.ts`) ustala administratorów organizacji, do
+której nale¿y zaatakowane konto, i tworzy dla nich rekordy `Notification`.
+
+Alerty s¹ wyciszane przez 60 minut dla tej samej pary sygna³/Ÿród³o, aby
+trwaj¹cy atak nie zala³ administratora. Dziennik audytu pozostaje kompletny —
+ograniczane s¹ wy³¹cznie powiadomienia.
+
+**Pozostaje do wykonania:** faktyczna wysy³ka. Rekordy `Notification` maj¹
+status `PENDING` i wymagaj¹ procesu dostarczaj¹cego je kana³em e-mail.
+Dopóki go nie ma, alert jest widoczny wy³¹cznie w bazie danych, co **nie
+wype³nia** obowi¹zku wczesnego ostrze¿enia z art. 23 NIS2 (24 h).
+
+**Przypadek brzegowy:** przy password sprayingu na nieistniej¹ce konta nie
+ma organizacji, któr¹ mo¿na powiadomiæ. Zdarzenie jest wtedy zamykane bez
+powiadomienia, ale pozostaje w dzienniku audytu.
 
 ## 4. Mapowanie na wymagania
 
@@ -126,10 +139,11 @@ incydentów (wczesne ostrze¿enie w 24 h) — wymaga uzupe³nienia.
 | Wykrywanie incydentów | NIS2 21(2)(b) | T2, T3, sygna³y anomalii |
 | Rozliczalnoœæ | NIS2 21(2)(d) | T8, dziennik audytu |
 | Bezpieczeñstwo danych osobowych | RODO art. 32 | T1–T5, RLS |
-| Zg³aszanie incydentów | NIS2 art. 23 | Czêœciowe — patrz O3 |
+| Zg³aszanie incydentów | NIS2 art. 23 | Czêœciowe — alert tworzony, brak wysy³ki (O3) |
 
 ## 5. Historia przegl¹du
 
 | Data | Zakres | Uwagi |
 |---|---|---|
 | 2026-09-15 | Wersja pierwotna | Wprowadzenie detekcji anomalii; T1–T8 |
+| 2026-09-15 | Powiadomienia | Konsument outboxu, wyciszanie alertów; O3 czêœciowo |
